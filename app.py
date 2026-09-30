@@ -6,6 +6,7 @@ import google.generativeai as genai
 import streamlit as st
 from docx import Document
 from PIL import Image
+from transcription import TRANSCRIPTION_PROMPT, transcription_to_docx_buffer
 
 
 def _split_table_row(row: str) -> list[str]:
@@ -137,7 +138,7 @@ def markdown_to_docx_buffer(markdown: str) -> io.BytesIO:
     return buffer
 
 
-st.set_page_config(page_title="시험지 깔끔 변환기", layout="centered")
+st.set_page_config(page_title="이미지 → Word 변환기", layout="centered")
 
 GEMINI_PROMPT = (
     "이 이미지들에서 볼펜이나 연필로 쓰인 낙서, 빗금, 풀이 과정, 체크 표시, 필기 흔적은 모두 무시해. "
@@ -162,11 +163,30 @@ with st.sidebar:
         help="Google AI Studio에서 발급받은 API 키를 입력하세요.",
     )
 
-st.title("시험지 깔끔 변환기")
+st.title("이미지 → Word 변환기")
+
+
+def clear_result():
+    for key in ("gemini_markdown", "download_file_name", "result_mode"):
+        st.session_state.pop(key, None)
+
+
+mode = st.radio(
+    "변환 모드", ["시험 문제 추출", "일반 내용 그대로 전사"],
+    key="conversion_mode", on_change=clear_result,
+)
+is_transcription = mode == "일반 내용 그대로 전사"
+st.caption(
+    "제목·문단·목록·표와 읽을 수 있는 필기를 원문 순서대로 옮깁니다. "
+    "복잡한 수식은 LaTeX 텍스트로 보존됩니다. 그림과 병합 셀의 배치는 완전히 재현되지 않을 수 있습니다."
+    if is_transcription else
+    "낙서와 부가 설명을 제외하고 문제번호·본문·보기·조건·지문·표만 추출합니다."
+)
 
 uploaded_file = st.file_uploader(
     "JPG, PNG, PDF 파일을 선택하세요",
     type=["jpg", "jpeg", "png", "pdf"],
+    on_change=clear_result,
 )
 
 key_ok = bool(api_key and api_key.strip())
@@ -174,11 +194,13 @@ file_ok = uploaded_file is not None
 can_convert = key_ok and file_ok
 
 if st.button("변환 시작", disabled=not can_convert):
-    st.session_state.pop("gemini_markdown", None)
-    file_bytes = uploaded_file.read()
+    clear_result()
+    file_bytes = uploaded_file.getvalue()
     uploaded_stem = Path(uploaded_file.name or "시험지").stem
     safe_stem = re.sub(r'[\\/:*?"<>|]+', "_", uploaded_stem).strip() or "시험지"
-    st.session_state["download_file_name"] = f"{safe_stem}_변환.docx"
+    suffix = "원문전사" if is_transcription else "변환"
+    st.session_state["download_file_name"] = f"{safe_stem}_{suffix}.docx"
+    prompt = TRANSCRIPTION_PROMPT if is_transcription else GEMINI_PROMPT
     name_lower = (uploaded_file.name or "").lower()
     is_pdf = uploaded_file.type == "application/pdf" or name_lower.endswith(".pdf")
 
@@ -189,12 +211,12 @@ if st.button("변환 시작", disabled=not can_convert):
         try:
             if is_pdf:
                 content = [
-                    GEMINI_PROMPT,
+                    prompt,
                     {"mime_type": "application/pdf", "data": file_bytes},
                 ]
             else:
                 image = Image.open(io.BytesIO(file_bytes))
-                content = [GEMINI_PROMPT, image]
+                content = [prompt, image]
 
             response = model.generate_content(content)
             try:
@@ -203,17 +225,24 @@ if st.button("변환 시작", disabled=not can_convert):
                 result_text = None
                 st.error("응답을 가져올 수 없습니다. 안전 필터 또는 빈 응답일 수 있습니다.")
 
-            if result_text:
+            if result_text and result_text.strip():
                 st.session_state["gemini_markdown"] = result_text
+                st.session_state["result_mode"] = mode
+            else:
+                st.warning("추출된 내용이 없습니다. 파일을 확인하고 다시 시도하세요.")
         except Exception as e:
             st.error(f"API 호출 오류: {e}")
 
 if st.session_state.get("gemini_markdown"):
     st.divider()
-    st.subheader("추출 결과")
+    st.subheader(st.session_state.get("result_mode", "추출 결과"))
+    st.caption("다운로드 전에 원본과 비교해 판독 결과를 확인하세요.")
     st.markdown(st.session_state["gemini_markdown"])
 
-    doc_buffer = markdown_to_docx_buffer(st.session_state["gemini_markdown"])
+    exporter = (transcription_to_docx_buffer
+                if st.session_state.get("result_mode") == "일반 내용 그대로 전사"
+                else markdown_to_docx_buffer)
+    doc_buffer = exporter(st.session_state["gemini_markdown"])
     st.download_button(
         label="워드 파일 다운로드",
         data=doc_buffer,
