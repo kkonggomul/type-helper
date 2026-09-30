@@ -38,8 +38,31 @@ class ExportTests(unittest.TestCase):
                            doc.paragraphs[4].paragraph_format.left_indent)
         self.assertEqual(doc.paragraphs[6].text, '3. 셋째')
         self.assertEqual(doc.tables[0].cell(1, 0).text, 'a|b\n다음')
-        self.assertEqual(doc.tables[0].cell(1, 1).text, '$x_i^2$')
-        self.assertIn('$$\\frac{a_1}{b_2}$$', doc.paragraphs[-1].text)
+        self.assertTrue(doc.tables[0].cell(1, 1)._tc.xpath('.//m:sSubSup'))
+        self.assertTrue(doc._element.xpath('.//m:f'))
+
+    def test_korean_aligned_equation(self):
+        source = r'''가치평가(Valuation)는 어떠한 대상물의 공정한 가치(fair value)를 평가하는 작업을 말한다.
+$$
+\begin{aligned}
+\text{주식가격(share price)} = &\text{ 내재가치(기본적 분석, 장기적 관점, 이론적 측면)} \\
+&\pm \text{수급(기술적 분석, 단기적 관점, 시장적 측면)}
+\end{aligned}
+$$'''
+        doc = Document(transcription_to_docx_buffer(source))
+        self.assertTrue(doc._element.xpath('.//m:oMath'))
+        self.assertEqual(len(doc._element.xpath('.//m:mr')), 2)
+        text = ''.join(doc._element.xpath('.//m:t/text()'))
+        for word in ['주식가격', '내재가치', '수급', '±']:
+            self.assertIn(word, text)
+        self.assertNotIn('begin{aligned}', doc._element.xml)
+
+    def test_math_fallback_and_delimiters(self):
+        doc = Document(transcription_to_docx_buffer(r'앞 \(x^2\) 뒤'))
+        self.assertTrue(doc._element.xpath('.//m:sSup'))
+        with patch('transcription.latex_to_mathml', side_effect=ValueError('unsupported')):
+            doc = Document(transcription_to_docx_buffer('$bad$'))
+            self.assertEqual(doc.paragraphs[0].text, '$bad$')
 
     def test_ragged_table_and_empty_document(self):
         doc = Document(transcription_to_docx_buffer('| A | B |\n| -- | -- |\n| C |'))

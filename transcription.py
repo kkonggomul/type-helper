@@ -1,12 +1,32 @@
 """Word export for faithfully transcribed explanatory text.
 
-Math is retained as Unicode or literal LaTeX, never silently discarded.
+LaTeX is converted to Office Math; failed conversions retain the source.
 """
 import io
 import re
 
 from docx import Document
 from docx.shared import Inches
+from docx.oxml import parse_xml
+from latex2mathml.converter import convert as latex_to_mathml
+from mathml2omml import convert as mathml_to_omml
+
+
+def _math(paragraph, source):
+    delimiter = 2 if source.startswith(('$$', r'\[', r'\(')) else 1
+    latex = source[delimiter:-delimiter].strip()
+    # latex2mathml supports arrays, but not the unnumbered aligned environment.
+    latex = latex.replace(r'\begin{aligned}', r'\begin{array}{rl}')
+    latex = latex.replace(r'\end{aligned}', r'\end{array}')
+    try:
+        omml = mathml_to_omml(latex_to_mathml(latex))
+        root = parse_xml(
+            '<root xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">'
+            + omml + '</root>')
+        for child in list(root):
+            paragraph._p.append(child)
+    except Exception:
+        paragraph.add_run(source)
 
 
 TRANSCRIPTION_PROMPT = r"""
@@ -41,9 +61,9 @@ def _separator(line):
 
 def _inline(paragraph, text):
     # Protect math spans from Markdown emphasis parsing.
-    for part in re.split(r"(\$\$[\s\S]*?\$\$|\$[^$\n]+\$|\*\*[^*]+\*\*|\*[^*\n]+\*)", text):
-        if part.startswith("$"):
-            paragraph.add_run(part)
+    for part in re.split(r"(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$[^$\n]+\$|\*\*[^*]+\*\*|\*[^*\n]+\*)", text):
+        if part.startswith(("$", r'\[', r'\(')):
+            _math(paragraph, part)
         elif part.startswith("**") and part.endswith("**"):
             paragraph.add_run(part[2:-2]).bold = True
         elif part.startswith("*") and part.endswith("*") and len(part) > 2:
@@ -66,7 +86,15 @@ def transcription_to_docx_buffer(markdown):
     while i < len(lines):
         line = lines[i]
         s = line.strip()
-        if not s:
+        if s.startswith(('$$', r'\[')):
+            flush()
+            end = '$$' if s.startswith('$$') else r'\]'
+            equation = [line]
+            while end not in ''.join(equation)[len(line) - len(line.lstrip()) + 2:] and i + 1 < len(lines):
+                i += 1
+                equation.append(lines[i])
+            _inline(doc.add_paragraph(), '\n'.join(equation))
+        elif not s:
             flush()
         elif i + 1 < len(lines) and "|" in s and _separator(lines[i + 1]):
             flush()
