@@ -205,7 +205,7 @@ if st.button("변환 시작", disabled=not can_convert):
     is_pdf = uploaded_file.type == "application/pdf" or name_lower.endswith(".pdf")
 
     genai.configure(api_key=api_key.strip())
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    model = genai.GenerativeModel("gemini-3.8-flash")
 
     with st.spinner("변환 중..."):
         try:

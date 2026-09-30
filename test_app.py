@@ -61,13 +61,14 @@ class AppTests(unittest.TestCase):
             model.generate_content.return_value.text = response
         with patch('streamlit.file_uploader', return_value=upload), \
                 patch('google.generativeai.configure'), \
-                patch('google.generativeai.GenerativeModel', return_value=model):
+                patch('google.generativeai.GenerativeModel', return_value=model) as model_factory:
             app = AppTest.from_file(str(Path(__file__).with_name('app.py'))).run(timeout=30)
             self.assertFalse(app.exception)
             app.radio[0].set_value(mode)
             app.text_input[0].set_value('test-key').run()
             app.button[0].click().run()
             self.assertFalse(app.exception)
+            model_factory.assert_called_once_with('gemini-3.8-flash')
         return app, model
 
     def test_both_modes_and_input_types(self):
